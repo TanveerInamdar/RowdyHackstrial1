@@ -13,12 +13,11 @@ import base64
 import os
 import numpy as np
 from typing import Dict, List, Tuple
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Load environment variables from env file
-load_dotenv('env')
+# Load environment variables from .env file
+load_dotenv()
 
 
 def propose_action(user_request: str,
@@ -44,10 +43,7 @@ def propose_action(user_request: str,
     
     try:
         # Initialize Gemini client
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        
-        # Convert screenshot to base64 for API
-        screenshot_base64 = base64.b64encode(screenshot_png).decode('utf-8')
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         
         # Build conversation history for context
         history_context = ""
@@ -57,7 +53,7 @@ def propose_action(user_request: str,
                 history_context += f"{i+1}. User: {item['user_request']}\n"
                 history_context += f"   Action: {item['action_taken']}\n"
         
-        # Create the prompt for Gemini 2.5 Flash
+        # Create the prompt for Gemini 2.5 Flash (using gemini-2.5-flash model)
         prompt = f"""You are a desktop automation assistant. Analyze the screenshot and user's voice command to determine where to click.
 
 Screen dimensions: {screen_size[0]}x{screen_size[1]} pixels
@@ -83,48 +79,20 @@ Examples:
 
 Be precise with coordinates. Look for visual elements that match the user's request."""
 
-        # Prepare content parts
-        parts = [{"text": prompt}]
+        # Prepare image
+        import PIL.Image
+        import io
+        image = PIL.Image.open(io.BytesIO(screenshot_png))
         
-        # Add screenshot
-        parts.append({
-            "inline_data": {
-                "mime_type": "image/png",
-                "data": screenshot_base64
-            }
-        })
+        # Create the model
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Add audio if available
-        if audio_samples is not None and len(audio_samples) > 0:
-            # Convert audio to base64 (assuming 16kHz mono float32)
-            import io
-            import wave
-            
-            # Convert numpy array to WAV bytes
-            audio_bytes = io.BytesIO()
-            with wave.open(audio_bytes, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(16000)  # 16kHz
-                wav_file.writeframes((audio_samples * 32767).astype(np.int16).tobytes())
-            
-            audio_base64 = base64.b64encode(audio_bytes.getvalue()).decode('utf-8')
-            parts.append({
-                "inline_data": {
-                    "mime_type": "audio/wav",
-                    "data": audio_base64
-                }
-            })
-
-        # Create the request using Gemini 2.5 Flash
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[{"parts": parts}]
-        )
+        # Generate content with image and prompt
+        response = model.generate_content([prompt, image])
         
         # Parse the response
-        if response.candidates and response.candidates[0].content:
-            content = response.candidates[0].content.parts[0].text
+        if response and response.text:
+            content = response.text
             
             # Try to extract JSON from the response
             import json
