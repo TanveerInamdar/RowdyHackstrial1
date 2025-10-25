@@ -13,8 +13,7 @@ import base64
 import os
 import numpy as np
 from typing import Dict, List, Tuple
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 # Load environment variables from env file
@@ -44,7 +43,7 @@ def propose_action(user_request: str,
     
     try:
         # Initialize Gemini client
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        genai.configure(api_key=os.getenv("AIzaSyCWu8q-z_aUmmGyhptVzwSW8UGPe3cGU2g"))
         
         # Convert screenshot to base64 for API
         screenshot_base64 = base64.b64encode(screenshot_png).decode('utf-8')
@@ -117,14 +116,12 @@ Be precise with coordinates. Look for visual elements that match the user's requ
             })
 
         # Create the request using Gemini 2.5 Flash
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[{"parts": parts}]
-        )
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        response = model.generate_content(parts)
         
         # Parse the response
-        if response.candidates and response.candidates[0].content:
-            content = response.candidates[0].content.parts[0].text
+        if response.text:
+            content = response.text
             
             # Try to extract JSON from the response
             import json
