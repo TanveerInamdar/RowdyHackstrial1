@@ -1,9 +1,7 @@
 """
 Action executor module for performing UI actions using pyautogui.
-
 This module takes action plans from the AI planner and executes them
 on the Windows desktop using pyautogui automation.
-
 TODO: In the future we will add a safety gate that asks for a spoken "yes"
 before executing high-risk actions like deleting files, modifying system settings,
 or performing actions that could cause data loss.

@@ -5,3 +5,4 @@ pillow
 openai-whisper
 torch
 google-generativeai
+python-dotenv

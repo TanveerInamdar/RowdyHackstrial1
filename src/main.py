@@ -75,7 +75,8 @@ def main():
                 user_request=user_text,
                 screenshot_png=png_bytes,
                 screen_size=screen_size,
-                history=history
+                history=history,
+                audio_samples=audio_samples
             )
             
             # 5. Check if we have an actionable plan

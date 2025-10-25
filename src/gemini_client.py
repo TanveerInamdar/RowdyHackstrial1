@@ -11,23 +11,30 @@ specific UI actions like mouse clicks and keyboard inputs.
 
 import base64
 import os
+import numpy as np
 from typing import Dict, List, Tuple
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
+
+# Load environment variables from env file
+load_dotenv('env')
 
 
 def propose_action(user_request: str,
                    screenshot_png: bytes,
                    screen_size: Tuple[int, int],
-                   history: List[Dict]) -> Dict:
+                   history: List[Dict],
+                   audio_samples: np.ndarray = None) -> Dict:
     """
-    Propose the next UI action using Gemini 2.5 Computer Use API.
+    Propose the next UI action using Gemini 2.5 Flash with audio + screenshot.
     
     Args:
-        user_request: The user's spoken command
+        user_request: The user's spoken command (transcribed text)
         screenshot_png: PNG bytes of current screen
         screen_size: (width, height) of the screen
         history: List of previous user_request + action_taken pairs
+        audio_samples: Raw audio samples (optional, for direct audio processing)
         
     Returns:
         Dict: Action to execute with standardized format
@@ -50,57 +57,69 @@ def propose_action(user_request: str,
                 history_context += f"{i+1}. User: {item['user_request']}\n"
                 history_context += f"   Action: {item['action_taken']}\n"
         
-        # Create the prompt for Computer Use
-        prompt = f"""You are a Computer Use agent that can see and interact with a Windows desktop screen.
+        # Create the prompt for Gemini 2.5 Flash
+        prompt = f"""You are a desktop automation assistant. Analyze the screenshot and user's voice command to determine where to click.
 
-User's current request: "{user_request}"
+Screen dimensions: {screen_size[0]}x{screen_size[1]} pixels
+User's request: "{user_request}"
 {history_context}
 
-Analyze the screenshot and determine the next UI action to fulfill the user's request.
+Look at the screenshot and identify the exact pixel coordinates (x, y) where you should click to fulfill the user's request.
 
-Available actions:
-- click(x, y): Click at specific coordinates
-- type_text(text): Type text at current cursor position
-- key(key_name): Press a key (win, enter, tab, etc.)
-- scroll(direction, amount): Scroll up/down/left/right
-- none: No action needed
-
-Respond with a JSON object containing:
+Respond with ONLY a JSON object in this exact format:
 {{
-    "action_type": "click|type_text|key|scroll|none",
-    "x": <int>,  // for click actions
-    "y": <int>,  // for click actions  
-    "text": "<string>",  // for type_text actions
-    "key": "<string>",  // for key actions
-    "direction": "<string>",  // for scroll actions (up/down/left/right)
-    "amount": <int>,  // for scroll actions
-    "reasoning": "<string>",  // brief explanation of why this action
-    "needs_confirmation": false  // set to true for risky actions
+    "action_type": "click",
+    "x": <pixel_x_coordinate>,
+    "y": <pixel_y_coordinate>,
+    "reasoning": "<brief explanation of why you chose these coordinates>"
 }}
 
-Focus on the user's request and provide the most direct action to accomplish it."""
+Examples:
+- "click start menu" → click bottom-left corner
+- "click settings" → find and click settings icon/app
+- "click chrome" → find and click Chrome browser icon
+- "click close" → find and click close button
+- "click minimize" → find and click minimize button
 
-        # Create the Computer Use request
+Be precise with coordinates. Look for visual elements that match the user's request."""
+
+        # Prepare content parts
+        parts = [{"text": prompt}]
+        
+        # Add screenshot
+        parts.append({
+            "inline_data": {
+                "mime_type": "image/png",
+                "data": screenshot_base64
+            }
+        })
+        
+        # Add audio if available
+        if audio_samples is not None and len(audio_samples) > 0:
+            # Convert audio to base64 (assuming 16kHz mono float32)
+            import io
+            import wave
+            
+            # Convert numpy array to WAV bytes
+            audio_bytes = io.BytesIO()
+            with wave.open(audio_bytes, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # mono
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(16000)  # 16kHz
+                wav_file.writeframes((audio_samples * 32767).astype(np.int16).tobytes())
+            
+            audio_base64 = base64.b64encode(audio_bytes.getvalue()).decode('utf-8')
+            parts.append({
+                "inline_data": {
+                    "mime_type": "audio/wav",
+                    "data": audio_base64
+                }
+            })
+
+        # Create the request using Gemini 2.5 Flash
         response = client.models.generate_content(
-            model="gemini-2.5-computer-use-preview-10-2025",
-            contents=[
-                types.Content(
-                    parts=[
-                        types.Part(text=prompt),
-                        types.Part(
-                            inline_data=types.InlineData(
-                                mime_type="image/png",
-                                data=screenshot_base64
-                            )
-                        )
-                    ]
-                )
-            ],
-            tools=[types.Tool(computer_use=types.ComputerUse())],
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=1000
-            )
+            model="gemini-2.5-flash",
+            contents=[{"parts": parts}]
         )
         
         # Parse the response
@@ -118,8 +137,15 @@ Focus on the user's request and provide the most direct action to accomplish it.
                     action_data = json.loads(json_str)
                     
                     # Convert to our standard format
-                    action = convert_gemini_action_to_standard(action_data)
+                    action = {
+                        "action_type": "click",
+                        "x": action_data.get("x", 0),
+                        "y": action_data.get("y", 0),
+                        "needs_confirmation": False
+                    }
+                    
                     print(f"[planner] plan: {action}")
+                    print(f"[planner] reasoning: {action_data.get('reasoning', 'No reasoning provided')}")
                     return action
                 else:
                     print(f"[planner] no JSON found in response: {content}")
@@ -135,65 +161,6 @@ Focus on the user's request and provide the most direct action to accomplish it.
         print(f"[planner] API error: {e}")
         print("[planner] using fallback logic")
         return fallback_action_logic(user_request, screen_size)
-
-
-def convert_gemini_action_to_standard(gemini_action: Dict) -> Dict:
-    """
-    Convert Gemini Computer Use action format to our standard format.
-    
-    Args:
-        gemini_action: Action dict from Gemini API
-        
-    Returns:
-        Dict: Standardized action format
-    """
-    action_type = gemini_action.get("action_type", "none")
-    
-    if action_type == "click":
-        return {
-            "action_type": "click",
-            "x": gemini_action.get("x", 0),
-            "y": gemini_action.get("y", 0),
-            "needs_confirmation": gemini_action.get("needs_confirmation", False)
-        }
-    elif action_type == "type_text":
-        return {
-            "action_type": "type_text",
-            "text": gemini_action.get("text", ""),
-            "needs_confirmation": gemini_action.get("needs_confirmation", False)
-        }
-    elif action_type == "key":
-        return {
-            "action_type": "key",
-            "key": gemini_action.get("key", ""),
-            "needs_confirmation": gemini_action.get("needs_confirmation", False)
-        }
-    elif action_type == "scroll":
-        # Convert scroll to sequence of key presses
-        direction = gemini_action.get("direction", "down")
-        amount = gemini_action.get("amount", 3)
-        
-        steps = []
-        for _ in range(min(amount, 5)):  # Limit scroll amount
-            if direction == "up":
-                steps.append({"action_type": "key", "key": "up"})
-            elif direction == "down":
-                steps.append({"action_type": "key", "key": "down"})
-            elif direction == "left":
-                steps.append({"action_type": "key", "key": "left"})
-            elif direction == "right":
-                steps.append({"action_type": "key", "key": "right"})
-        
-        return {
-            "action_type": "sequence",
-            "steps": steps,
-            "needs_confirmation": gemini_action.get("needs_confirmation", False)
-        }
-    else:
-        return {
-            "action_type": "none",
-            "needs_confirmation": False
-        }
 
 
 def fallback_action_logic(user_request: str, screen_size: Tuple[int, int]) -> Dict:
