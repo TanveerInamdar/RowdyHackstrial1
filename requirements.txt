@@ -1,0 +1,6 @@
+sounddevice
+numpy
+pyautogui
+pillow
+openai-whisper
+torch
