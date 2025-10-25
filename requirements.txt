@@ -4,3 +4,4 @@ pyautogui
 pillow
 openai-whisper
 torch
+google-generativeai
